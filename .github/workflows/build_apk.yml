@@ -1,3 +1,4 @@
+
 name: Build APK
 
 on:
@@ -17,6 +18,9 @@ jobs:
           java-version: '17'
 
       - uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant Gradle execution permission
+        run: chmod +x gradlew
 
       - name: Build debug APK
         run: ./gradlew assembleDebug --stacktrace
