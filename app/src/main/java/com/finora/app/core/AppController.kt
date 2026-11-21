@@ -3,6 +3,9 @@ package com.finora.app.core
 import com.finora.app.Config
 import com.finora.app.data.AppData
 import com.finora.app.data.DataParser
+import com.finora.app.data.Ledger
+import com.finora.app.finance.TxFilters
+import java.time.ZoneId
 import com.finora.app.data.KeyValueStore
 import com.finora.app.data.Keys
 import com.finora.app.net.ApiException
@@ -38,7 +41,9 @@ class AppController(
     private val store: KeyValueStore,
     private val api: SupabaseApi,
     private val io: kotlin.coroutines.CoroutineContext = Dispatchers.IO,
-    private val splashMinMillis: Long = 500
+    private val splashMinMillis: Long = 500,
+    val zone: ZoneId = ZoneId.systemDefault(),
+    private val nowMillis: () -> Long = { System.currentTimeMillis() }
 ) {
     private val _screen = MutableStateFlow(Screen.SPLASH)
     val screen: StateFlow<Screen> = _screen
@@ -68,6 +73,42 @@ class AppController(
         onRemoteApplied = { reloadData() },
         io = io
     )
+
+    /** write side (month roll-over, archive, persistence); every synced write schedules a cloud save */
+    val ledger: Ledger = Ledger(store, zone, nowMillis) { key -> sync.onLocalChange(key) }
+
+    // ───────────── home state (device-local) ─────────────
+
+    private val _txFilters = MutableStateFlow(TxFilters())
+    val txFilters: StateFlow<TxFilters> = _txFilters
+    fun setTxFilters(f: TxFilters) { _txFilters.value = f }
+
+    private val _heroAccountId = MutableStateFlow<String?>(null)
+    val heroAccountId: StateFlow<String?> = _heroAccountId
+    fun setHeroAccount(id: String?) { _heroAccountId.value = id }
+
+    private val _excludeLoans = MutableStateFlow(store.get(Keys.EXCLUDE_LOANS) == "1")
+    val excludeLoans: StateFlow<Boolean> = _excludeLoans
+    fun setExcludeLoans(v: Boolean) {
+        _excludeLoans.value = v
+        store.set(Keys.EXCLUDE_LOANS, if (v) "1" else "0")
+    }
+
+    private val _viewingMonthKey = MutableStateFlow<String?>(null)
+    val viewingMonthKey: StateFlow<String?> = _viewingMonthKey
+    fun setViewingMonth(key: String?) { _viewingMonthKey.value = key }
+
+    private val _tick = MutableStateFlow(0)
+    /** bumps when the clock-dependent numbers must be recomputed (resume / new day) */
+    val tick: StateFlow<Int> = _tick
+
+    /** month roll-over + archive upkeep (web: boot() / month watcher) */
+    fun runBootTasks() {
+        val crossed = ledger.bootTasks()
+        reloadData()
+        if (crossed) _viewingMonthKey.value = null
+        _tick.value = _tick.value + 1
+    }
 
     // ───────────── theme ─────────────
 
@@ -168,6 +209,7 @@ class AppController(
         reloadData()                 // local copy first, so offline start works
         sync.loadFromServer()
         reloadData()
+        runBootTasks()
         if (session != null) {
             _screen.value = Screen.MAIN
             if (foreground) sync.startPolling()
@@ -178,6 +220,7 @@ class AppController(
 
     fun onForeground() {
         foreground = true
+        if (sync.enabled && _screen.value == Screen.MAIN) runBootTasks()
         if (!sync.enabled) return
         scope.launch { sync.syncFromServer(force = false) }
         sync.startPolling()

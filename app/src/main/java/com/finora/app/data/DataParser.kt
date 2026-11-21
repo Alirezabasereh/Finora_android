@@ -235,6 +235,45 @@ object DataParser {
         return Profile(name = nameRaw.ifEmpty { "کاربر" }, avatar = avatar, avatarIndex = idx, avatarMode = mode)
     }
 
+    fun parseLoans(raw: String?): List<Loan> {
+        val arr = safeJson(raw) as? JSONArray ?: return emptyList()
+        val out = ArrayList<Loan>()
+        for (i in 0 until arr.length()) {
+            val o = arr.opt(i) as? JSONObject ?: continue
+            fun num(k: String): Double = (jsNumber(opt(o, k), !o.has(k)) ?: 0.0)
+            out.add(
+                Loan(
+                    id = jsString(opt(o, "id")),
+                    title = jsString(opt(o, "title")),
+                    installmentAmount = num("installmentAmount"),
+                    totalInstallments = num("totalInstallments"),
+                    paidInstallments = num("paidInstallments"),
+                    dueDay = num("dueDay").toInt(),
+                    createdAt = num("createdAt").toLong()
+                )
+            )
+        }
+        return out
+    }
+
+    fun parseArchive(raw: String?, cats: List<Category>): Map<String, ArchiveEntry> {
+        val obj = safeJson(raw) as? JSONObject ?: return emptyMap()
+        val out = LinkedHashMap<String, ArchiveEntry>()
+        for (key in obj.keys()) {
+            val e = obj.opt(key) as? JSONObject ?: continue
+            val txRaw = e.opt("transactions")
+            val txs = if (txRaw is JSONArray) parseTransactions(txRaw.toString(), cats) else emptyList()
+            out[key] = ArchiveEntry(
+                key = key,
+                jy = (jsNumber(opt(e, "jy"), !e.has("jy")) ?: 0.0).toInt(),
+                jm = (jsNumber(opt(e, "jm"), !e.has("jm")) ?: 0.0).toInt(),
+                initialBalance = jsNumber(opt(e, "initialBalance"), !e.has("initialBalance")) ?: 0.0,
+                transactions = txs
+            )
+        }
+        return out
+    }
+
     fun parse(store: KeyValueStore): AppData {
         val cats = parseCategories(store.get(Keys.CATEGORIES))
         val loansRaw = store.get(Keys.LOANS)
@@ -246,7 +285,9 @@ object DataParser {
             accounts = parseAccounts(store.get(Keys.ACCOUNTS)),
             accountTransfers = parseTransfers(store.get(Keys.ACCOUNT_TRANSFERS)),
             profile = parseProfile(store.get(Keys.PROFILE)),
-            loansJson = if (safeJson(loansRaw) is JSONArray) loansRaw!! else "[]"
+            loansJson = if (safeJson(loansRaw) is JSONArray) loansRaw!! else "[]",
+            loans = parseLoans(loansRaw),
+            archive = parseArchive(store.get(Keys.MONTHLY_ARCHIVE), cats)
         )
     }
 }

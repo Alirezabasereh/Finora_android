@@ -69,9 +69,58 @@ object Fa {
     fun money(amount: Double?): String = plainMoney(amount) + " تومان"
     fun money(amount: Long): String = group(amount) + " تومان"
 
+    /** `${toPersianNumber(Math.abs(n).toFixed(digits))}٪` — toFixed rounds the exact binary value, ties up. */
     fun percent(value: Double, fractionDigits: Int = 1): String {
-        val v = if (value.isNaN() || value.isInfinite()) 0.0 else value
-        return digits(String.format(Locale.ROOT, "%.${fractionDigits}f", abs(v))) + "٪"
+        val v = if (value.isNaN() || value.isInfinite()) 0.0 else abs(value)
+        val text = java.math.BigDecimal(v).setScale(fractionDigits, java.math.RoundingMode.HALF_UP).toPlainString()
+        return digits(text) + "٪"
+    }
+
+    /** formatMoneyCompact(): Intl en-US compact notation, max 1 fraction digit, then Persian digits. */
+    fun compact(value: Double): String {
+        val n = roundHalfUp(if (value.isNaN() || value.isInfinite()) 0.0 else value)
+        val neg = n < 0
+        val a = java.math.BigDecimal(Math.abs(n))
+        val units = arrayOf("", "K", "M", "B", "T")
+        var k = 0
+        if (Math.abs(n) >= 1000) {
+            val len = Math.abs(n).toString().length
+            k = minOf(4, (len - 1) / 3)
+        }
+        var scaled = a.movePointLeft(3 * k)
+        if (k > 0) {
+            scaled = scaled.setScale(1, java.math.RoundingMode.HALF_UP)
+            if (k < 4 && scaled >= java.math.BigDecimal(1000)) {
+                k++
+                scaled = a.movePointLeft(3 * k).setScale(1, java.math.RoundingMode.HALF_UP)
+            }
+        }
+        var text = scaled.toPlainString()
+        if (text.contains('.')) text = text.trimEnd('0').trimEnd('.')
+        return digits((if (neg) "-" else "") + text + units[k])
+    }
+
+    /** Intl.NumberFormat('fa-IR', {maximumFractionDigits}) for non-negative values (shortest-repr rounding, ties up). */
+    fun faDecimal(value: Double, maxFraction: Int): String {
+        val bd = java.math.BigDecimal(java.lang.Double.toString(value)).setScale(maxFraction, java.math.RoundingMode.HALF_UP)
+        val plain = bd.toPlainString()
+        val intPart = plain.substringBefore('.')
+        var frac = if (plain.contains('.')) plain.substringAfter('.').trimEnd('0') else ""
+        val grouped = group(intPart.toLong())
+        return if (frac.isEmpty()) grouped else grouped + "\u066B" + digits(frac)
+    }
+
+    /** formatMoneyShortFa() */
+    fun shortMoney(amount: Double): String {
+        val n = roundHalfUp(if (amount.isNaN()) 0.0 else amount)
+        val abs = Math.abs(n)
+        var value = abs.toDouble()
+        var unit = ""
+        if (abs >= 1_000_000_000L) { value = abs / 1e9; unit = " میلیارد" }
+        else if (abs >= 1_000_000L) { value = abs / 1e6; unit = " میلیون" }
+        else if (abs >= 100_000L) { value = abs / 1e3; unit = " هزار" }
+        val text = faDecimal(value, if (unit.isNotEmpty()) 1 else 0)
+        return (if (n < 0) "-" else "") + text + unit + " تومان"
     }
 
     /** parseMoneyInput(): accepts numbers or digit strings (any digit script); anything else -> 0. */
